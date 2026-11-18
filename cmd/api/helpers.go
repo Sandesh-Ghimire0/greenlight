@@ -9,6 +9,8 @@ import (
 	"github.com/julienschmidt/httprouter"
 )
 
+type envelope map[string]any
+
 func (app *application) readIDParams(r *http.Request) (int64, error) {
 	// httprouter when parsing the request, stores the dynamic parameter in the request context
 	params := httprouter.ParamsFromContext(r.Context())
@@ -21,8 +23,10 @@ func (app *application) readIDParams(r *http.Request) (int64, error) {
 	return id, nil
 }
 
-func (app *application) writeJSON(w http.ResponseWriter, data any, statusCode int, headers http.Header) error {
+func (app *application) writeJSON(w http.ResponseWriter, data envelope, statusCode int, headers http.Header) error {
 	js, err := json.Marshal(data)
+	// or json.MarshalIndent() has some performance impact but makes json output more prettier and easy to read 
+
 	if err != nil {
 		return err
 	}
