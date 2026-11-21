@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/julienschmidt/httprouter"
 )
@@ -50,15 +51,26 @@ func (app *application) writeJSON(w http.ResponseWriter, data envelope, statusCo
 
 // decodes the json input
 // if there is any error returns appropriate message
-func (app *application) readJSON(r *http.Request, dst any) error {
-	err := json.NewDecoder(r.Body).Decode(dst)
+func (app *application) readJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	maxBytes := 1_048_576
+	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
+
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields() // decoder will throw error if json contains a field that is not defined in destination struct
+
+	err := dec.Decode(dst)
 
 	if err != nil {
 		var syntaxError *json.SyntaxError
 		var unmarshalTypeError *json.UnmarshalTypeError
-		var invalidUnmarshalError *json.InvalidUnmarshalError // occurs if destination is not a pointer
+		var invalidUnmarshalError *json.InvalidUnmarshalError
+		var maxBytesError *http.MaxBytesError
 
 		switch {
+		// body size limit is 1MB
+		case errors.As(err, &maxBytesError):
+			return fmt.Errorf("body must not be larger than %d bytes", maxBytesError.Limit)
+
 		// sytax error in json
 		case errors.As(err, &syntaxError):
 			return fmt.Errorf("body contains badly formed-json (at character %d)", syntaxError.Offset)
@@ -79,6 +91,12 @@ func (app *application) readJSON(r *http.Request, dst any) error {
 		case errors.Is(err, io.EOF):
 			return fmt.Errorf("body must not be empty")
 
+		// If the JSON contains a field which cannot be mapped to the target destination
+		// then Decode() will now return an error message in the format "json: unknown field "<name>"".
+		case strings.HasPrefix(err.Error(), "json: unknown field "):
+			fieldname := strings.TrimPrefix(err.Error(), "json: unknown field ")
+			return fmt.Errorf("body contains unknown key %s", fieldname)
+
 		// if the destination for decode() is anything except non-nil pointer
 		case errors.As(err, &invalidUnmarshalError):
 			panic(err)
@@ -87,6 +105,16 @@ func (app *application) readJSON(r *http.Request, dst any) error {
 			return err
 		}
 	}
+
+	// if the body contain multiple json value like {{}{}}
+	// return error
+	// this is the second time we are calling decoder, this Decode() will look for second json value if there is no second value 
+	// then it will return io.EOF error
+	err = dec.Decode(&struct{}{})
+	if !errors.Is(err, io.EOF) {
+		return fmt.Errorf("body must contain only a single json value")
+	}
+
 
 	return nil
 }
